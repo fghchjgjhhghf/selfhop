@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio, re
 from pathlib import Path
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PhoneNumberInvalidError
 
 # App credentials used by this Telethon client.
@@ -18,6 +18,7 @@ class TelethonManager:
         self.clients: dict[int,TelegramClient]={}
         self.locks: dict[int,asyncio.Lock]={}
         self.pending: dict[int,str]={}
+        self.command_handler=None
     def lock(self,uid): return self.locks.setdefault(uid,asyncio.Lock())
     def path(self,uid): return str(self.cfg.session_dir/f"{uid}")
     async def client(self,uid):
@@ -26,6 +27,19 @@ class TelethonManager:
             c=TelegramClient(self.path(uid),API_ID,API_HASH)
             await c.connect()
             self.clients[uid]=c
+
+            async def outgoing_commands(event):
+                if not self.command_handler:
+                    return
+                text=(event.raw_text or "").strip()
+                m=re.match(r"^/(play|fish)(?:@\w+)?(?:\s+(.+))?$", text, re.I)
+                if not m:
+                    return
+                try:
+                    await self.command_handler(uid,int(event.chat_id),m.group(1).lower(),m.group(2))
+                except Exception:
+                    return
+            c.add_event_handler(outgoing_commands, events.NewMessage(outgoing=True))
         return c
     async def is_ready(self,uid):
         try:
@@ -116,6 +130,30 @@ class TelethonManager:
                 return m
             await asyncio.sleep(1)
         return None
+    async def withdraw_points(self,uid,chat_id):
+        """Send the trigger word first, then press the inline withdrawal button in its reply."""
+        c=await self.client(uid)
+        msgs=await c.get_messages(chat_id,limit=1)
+        before=msgs[0].id if msgs else 0
+        await self.send_text(uid,chat_id,"هاپو")
+        m=await self.recent_message(uid,chat_id,before,max(5,self.cfg.fish_reply_timeout))
+        if not m or not m.buttons:
+            return False
+        for i,row in enumerate(m.buttons):
+            for j,button in enumerate(row):
+                text=str(getattr(button,"text","") or "").strip()
+                if "برداشت" not in text:
+                    continue
+                # Inline callback buttons have `data`; URL/reply buttons should not be clicked here.
+                if getattr(button,"data",None) is None:
+                    continue
+                try:
+                    await m.click(i=i,j=j)
+                    return True
+                except Exception:
+                    continue
+        return False
+
     async def parse_fish(self,uid,chat_id,after_id):
         m=await self.recent_message(uid,chat_id,after_id,self.cfg.fish_reply_timeout)
         if not m: return None

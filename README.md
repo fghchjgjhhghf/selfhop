@@ -13,9 +13,10 @@ A Persian Telegram bot panel that manages user subscriptions and optional Teleth
 - After activation, self panel:
   - group list and multi-select
   - automatic «هاپ» schedule: 5/10/15/20 minutes + 20 seconds
-  - fish workflow with sell/feed/fridge rules and numeric thresholds 1–6
-  - scheduled «برداشت هاپو»
-  - game mode with 100/200/300 and ON/OFF; only allowed with one selected group
+  - fish workflow with a minute-based automatic «ماهی» interval plus sell/feed/fridge rules and numeric thresholds 1–6
+  - scheduled «برداشت هاپو»: sends «هاپو» first, then clicks the inline withdrawal button in the reply
+  - `/play` game mode with 100/200/300; runs in the chat where `/play` is sent and spreads 🎰 messages across 60 seconds
+  - `/menu` command to open the configuration menu
   - automatic 3 rescue attempts for a configured street-dog event phrase
 - Subscription expiry disables automation.
 - All normal bot UI navigation edits the existing bot message rather than sending a new UI message.
@@ -35,6 +36,7 @@ Railway containers can be recreated. Mount a Railway Volume at `/data`, otherwis
 5. Put admin numeric IDs in `ADMIN_IDS` and payment admins in `PAYMENT_ADMIN_IDS`.
 6. Set `CARD_NUMBER` and `SUPPORT_URL`.
 7. Set `GAME_BOT_USERNAME` to the bot that replies to «ماهی».
+8. For `/play` and `/fish` to work from the connected Telegram account in any chat, the self account's outgoing command listener must be active (this build enables it automatically after login).
 8. Deploy this repository to Railway and mount a Volume to `/data`.
 
 ## Run locally

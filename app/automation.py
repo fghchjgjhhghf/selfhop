@@ -9,6 +9,7 @@ class Automation:
     def __init__(self,cfg,db,tg):
         self.cfg=cfg; self.db=db; self.tg=tg
         self.tasks: dict[int,list[asyncio.Task]]={}
+        self.play_tasks: dict[tuple[int,int],asyncio.Task]={}
     async def active(self,uid):
         if not await self.tg.is_ready(uid): return False
         if uid in self.cfg.admin_ids: return True
@@ -20,18 +21,43 @@ class Automation:
                 await self.db.disable_subscription(uid); return False
         except ValueError: return False
         return True
+    async def handle_self_command(self,uid,chat_id,command,arg):
+        if not await self.active(uid):
+            return
+        if command=="play":
+            s=await self.db.settings(uid)
+            await self.play(uid,chat_id,int(s["game_count"]))
+            return
+        if command=="fish":
+            groups=await self.db.selected_groups(uid)
+            if not groups:
+                return
+            try:
+                minutes=int((arg or "").translate(DIGIT_MAP))
+            except ValueError:
+                minutes=0
+            if minutes < 1 or minutes > 10080:
+                return
+            await self.db.set_setting(uid,"fish_minutes",minutes)
+            await self.db.set_setting(uid,"fish_enabled",1)
+            await self.restart(uid)
+
     async def restart(self,uid):
         await self.stop(uid)
         if await self.active(uid):
             self.tasks[uid]=[
                 asyncio.create_task(self.hop_loop(uid)),
+                asyncio.create_task(self.fish_loop(uid)),
                 asyncio.create_task(self.withdraw_loop(uid)),
-                asyncio.create_task(self.game_loop(uid)),
                 asyncio.create_task(self.rescue_loop(uid)),
             ]
     async def stop(self,uid):
         for t in self.tasks.pop(uid,[]):
             t.cancel()
+        for key,t in list(self.play_tasks.items()):
+            if key[0] == uid:
+                t.cancel()
+                self.play_tasks.pop(key,None)
     async def _sleep_or_cancel(self,seconds):
         await asyncio.sleep(max(1,seconds))
     async def hop_loop(self,uid):
@@ -49,6 +75,19 @@ class Automation:
                     await self.tg.send_text(uid,chat,"هاپ")
             except asyncio.CancelledError: return
             except Exception: await asyncio.sleep(5)
+    async def fish_loop(self,uid):
+        while True:
+            try:
+                s=await self.db.settings(uid)
+                mins=max(1,int(s["fish_minutes"] or 1))
+                if not s["fish_enabled"] or not await self.active(uid):
+                    await asyncio.sleep(5); continue
+                await asyncio.sleep(mins*60)
+                if not await self.active(uid): return
+                await self.fish_once(uid)
+            except asyncio.CancelledError: return
+            except Exception: await asyncio.sleep(5)
+
     async def withdraw_loop(self,uid):
         last=None
         while True:
@@ -60,7 +99,7 @@ class Automation:
                 await asyncio.sleep(2)
                 if asyncio.get_running_loop().time()-last >= mins*60:
                     for chat,_ in await self.db.selected_groups(uid):
-                        try: await self.tg.send_text(uid,chat,"برداشت هاپو")
+                        try: await self.tg.withdraw_points(uid,chat)
                         except Exception: pass
                     last=asyncio.get_running_loop().time()
             except asyncio.CancelledError: return
@@ -82,6 +121,35 @@ class Automation:
                 await asyncio.sleep(5)
             except asyncio.CancelledError: return
             except Exception: await asyncio.sleep(5)
+    async def play(self,uid,chat_id,count):
+        if not await self.active(uid): return False
+        key=(uid,int(chat_id))
+        old=self.play_tasks.get(key)
+        if old and not old.done():
+            old.cancel()
+
+        async def runner():
+            try:
+                n=max(1,min(int(count),1000))
+                # Spread the selected number of slot-machine messages over exactly one minute.
+                interval=60.0/n
+                started=asyncio.get_running_loop().time()
+                for i in range(n):
+                    if i:
+                        target=started + i*interval
+                        await asyncio.sleep(max(0,target-asyncio.get_running_loop().time()))
+                    if not await self.active(uid): return
+                    try: await self.tg.send_text(uid,chat_id,"🎰")
+                    except Exception: return
+            except asyncio.CancelledError:
+                return
+            finally:
+                if self.play_tasks.get(key) is asyncio.current_task():
+                    self.play_tasks.pop(key,None)
+
+        self.play_tasks[key]=asyncio.create_task(runner())
+        return True
+
     async def rescue_loop(self,uid):
         last_ids={}
         phrase_re=re.compile(r"هاپوی خیابونی.*ترسیده.*کنار شهر.*پیدا شد",re.I|re.S)

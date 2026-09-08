@@ -65,7 +65,8 @@ def fish_kb(s):
         state="—" if op=="none" else (f"{'≥' if op=='gte' else '≤'} {val}")
         return f"{name}: {state}"
     return kb([
-        ("🎣 دریافت ماهی","fishget"),
+        (f"🎣 ماهی: {'ON 🟢' if s['fish_enabled'] else 'OFF 🔴'} | هر {s['fish_minutes']} دقیقه","fishtoggle"),
+        ("🎣 دریافت ماهی همین الان","fishget"),
         (label("فروش",s["fish_sell_op"],s["fish_sell_value"]),"fishrule:sell"),
         (label("بده هاپو بخوره",s["fish_feed_op"],s["fish_feed_value"]),"fishrule:feed"),
         (f"یخچال: {'ON' if s['fish_fridge'] else 'OFF'}","fishfridge"),
@@ -79,7 +80,13 @@ def fish_numbers(kind,op):
     return kb([(str(i),f"fval:{kind}:{op}:{i}") for i in range(1,7)] + [("↩️ بازگشت","fish")])
 
 def game_kb(s):
-    return kb([("۱۰۰","gamecount:100"),("۲۰۰","gamecount:200"),("۳۰۰","gamecount:300"),(f"بازی: {'ON 🟢' if s['game_enabled'] else 'OFF 🔴'}","gametoggle"),("↩️ بازگشت","self")])
+    return kb([
+        (f"تعداد فعلی: {s['game_count']}","gameinfo"),
+        ("۱۰۰","gamecount:100"),
+        ("۲۰۰","gamecount:200"),
+        ("۳۰۰","gamecount:300"),
+        ("↩️ بازگشت","self")
+    ])
 
 def group_kb(groups,selected):
     b=InlineKeyboardBuilder()

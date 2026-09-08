@@ -28,7 +28,7 @@ class DB:
               FOREIGN KEY(user_id) REFERENCES users(user_id)
             );
             CREATE TABLE IF NOT EXISTS settings(
-              user_id INTEGER PRIMARY KEY, fish_enabled INTEGER DEFAULT 0,
+              user_id INTEGER PRIMARY KEY, fish_enabled INTEGER DEFAULT 0, fish_minutes INTEGER DEFAULT 5,
               fish_sell_op TEXT DEFAULT 'none', fish_sell_value INTEGER DEFAULT 3,
               fish_feed_op TEXT DEFAULT 'none', fish_feed_value INTEGER DEFAULT 3,
               fish_fridge INTEGER DEFAULT 1,
@@ -48,6 +48,11 @@ class DB:
               FOREIGN KEY(user_id) REFERENCES users(user_id)
             );
             """)
+            # Lightweight schema migration for databases created by older builds.
+            c=await db.execute("PRAGMA table_info(settings)")
+            columns={row[1] for row in await c.fetchall()}
+            if "fish_minutes" not in columns:
+                await db.execute("ALTER TABLE settings ADD COLUMN fish_minutes INTEGER DEFAULT 5")
             await db.commit()
     async def ensure_user(self,uid):
         t=now_iso()
@@ -105,15 +110,15 @@ class DB:
     async def settings(self,uid):
         await self.ensure_user(uid)
         async with aiosqlite.connect(self.path) as db:
-            c=await db.execute("SELECT fish_enabled,fish_sell_op,fish_sell_value,fish_feed_op,fish_feed_value,fish_fridge,hop_enabled,hop_minutes,withdraw_minutes,game_enabled,game_count,rescue_enabled FROM settings WHERE user_id=?",(uid,)); r=await c.fetchone()
+            c=await db.execute("SELECT fish_enabled,fish_minutes,fish_sell_op,fish_sell_value,fish_feed_op,fish_feed_value,fish_fridge,hop_enabled,hop_minutes,withdraw_minutes,game_enabled,game_count,rescue_enabled FROM settings WHERE user_id=?",(uid,)); r=await c.fetchone()
             if not r:
                 await db.execute("INSERT INTO settings(user_id) VALUES(?)",(uid,)); await db.commit()
                 return await self.settings(uid)
-            keys=["fish_enabled","fish_sell_op","fish_sell_value","fish_feed_op","fish_feed_value","fish_fridge","hop_enabled","hop_minutes","withdraw_minutes","game_enabled","game_count","rescue_enabled"]
+            keys=["fish_enabled","fish_minutes","fish_sell_op","fish_sell_value","fish_feed_op","fish_feed_value","fish_fridge","hop_enabled","hop_minutes","withdraw_minutes","game_enabled","game_count","rescue_enabled"]
             return dict(zip(keys,r))
     async def set_setting(self,uid,key,value):
         await self.ensure_user(uid)
-        allowed={"fish_enabled","fish_sell_op","fish_sell_value","fish_feed_op","fish_feed_value","fish_fridge","hop_enabled","hop_minutes","withdraw_minutes","game_enabled","game_count","rescue_enabled"}
+        allowed={"fish_enabled","fish_minutes","fish_sell_op","fish_sell_value","fish_feed_op","fish_feed_value","fish_fridge","hop_enabled","hop_minutes","withdraw_minutes","game_enabled","game_count","rescue_enabled"}
         if key not in allowed: raise ValueError("bad setting")
         async with aiosqlite.connect(self.path) as db:
             await db.execute(f"UPDATE settings SET {key}=? WHERE user_id=?",(value,uid)); await db.commit()

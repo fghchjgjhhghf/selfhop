@@ -20,6 +20,7 @@ cfg.data_dir.mkdir(parents=True,exist_ok=True)
 db=DB(cfg.data_dir/"panel.sqlite3")
 tg=TelethonManager(cfg,db)
 auto=Automation(cfg,db,tg)
+tg.command_handler=auto.handle_self_command
 bot=Bot(cfg.bot_token)
 dp=Dispatcher()
 
@@ -63,6 +64,50 @@ async def start(m:Message):
         await show_gate(m); return
     await home_message(m,uid)
 
+@dp.message(Command("menu"))
+async def menu_cmd(m:Message):
+    uid=m.from_user.id; await db.ensure_user(uid)
+    if cfg.force_join and not await membership_ok(uid):
+        await show_gate(m); return
+    if await entitled(uid) and await tg.is_ready(uid):
+        await m.answer("🤖 منوی تنظیمات سلف\n\nهمه تنظیمات خودکار را از اینجا کنترل کنید.",reply_markup=self_kb())
+    else:
+        await home_message(m,uid)
+
+@dp.message(Command("fish"))
+async def fish_cmd(m:Message):
+    uid=m.from_user.id
+    if cfg.force_join and not await membership_ok(uid):
+        await show_gate(m); return
+    if not await entitled(uid):
+        await m.answer("ابتدا اشتراک معتبر و سلف فعال لازم است."); return
+    parts=(m.text or "").split(maxsplit=1)
+    if len(parts)==1:
+        await db.set_state(uid,"fish_interval")
+        await m.answer("🎣 چند دقیقه یک‌بار «ماهی» ارسال شود؟ یک عدد بین ۱ تا ۱۰۰۸۰ وارد کنید.")
+        return
+    try:
+        minutes=int(parts[1].translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹","0123456789")))
+        if minutes<1 or minutes>10080: raise ValueError
+        await db.set_setting(uid,"fish_minutes",minutes)
+        await db.set_setting(uid,"fish_enabled",1)
+        await db.set_state(uid,"idle")
+        await auto.restart(uid)
+        await m.answer(f"🎣 ماهی فعال شد؛ هر {minutes} دقیقه یک‌بار ارسال می‌شود.")
+    except ValueError:
+        await m.answer("یک عدد بین ۱ تا ۱۰۰۸۰ دقیقه وارد کنید.")
+
+@dp.message(Command("play"))
+async def play_cmd(m:Message):
+    uid=m.from_user.id
+    if cfg.force_join and not await membership_ok(uid):
+        await show_gate(m); return
+    if not await entitled(uid):
+        await m.answer("ابتدا اشتراک معتبر و سلف فعال لازم است."); return
+    s=await db.settings(uid)
+    started=await auto.play(uid,m.chat.id,int(s["game_count"]))
+    await m.answer(f"🎰 بازی با {s['game_count']} ارسال شروع شد؛ مدت اجرا ۶۰ ثانیه است.") if started else await m.answer("شروع بازی ممکن نشد.")
+
 @dp.message(Command("help"))
 async def help_cmd(m:Message):
     if cfg.force_join and not await membership_ok(m.from_user.id):
@@ -76,9 +121,10 @@ What can this robot do?
 • راه‌اندازی سلف: شماره خودتان را با دکمه ارسال شماره بدهید، سپس کد ورود و در صورت نیاز رمز دومرحله‌ای را وارد کنید.
 • لیست گپ‌ها: گپ‌های قابل استفاده اکانت را می‌بینید و می‌توانید یک یا چند مورد را انتخاب کنید.
 • هاپ: فاصله ارسال «هاپ» را انتخاب و آن را روشن/خاموش کنید.
-• ماهی: دریافت ماهی را فعال کرده و برای فروش یا غذا دادن شرط ارزش غذایی تعیین کنید؛ ماهی‌ای که هیچ شرطی را نداشته باشد به یخچال می‌رود.
-• برداشت هاپو: تعداد دقیقه را وارد کنید تا پیام برداشت به‌صورت دوره‌ای ارسال شود.
-• بازی: فقط با یک گپ فعال می‌شود و تعداد ۱۰۰/۲۰۰/۳۰۰ را انتخاب می‌کنید.
+• ماهی: با /fish یا از منو، فاصله را به دقیقه تعیین کنید تا «ماهی» به‌صورت دوره‌ای ارسال شود؛ شرط فروش/غذا/یخچال هم قابل تنظیم است.
+• برداشت هاپو: تعداد دقیقه را وارد کنید؛ ربات ابتدا «هاپو» را می‌فرستد و سپس دکمه شیشه‌ای برداشت را می‌زند.
+• بازی: تعداد ۱۰۰/۲۰۰/۳۰۰ را انتخاب کنید؛ سپس /play را در هر گپی که می‌خواهید بفرستید تا ارسال‌های 🎰 طی ۶۰ ثانیه انجام شود.
+• /menu: در هر جایی که ربات پیام را دریافت کند، منوی تنظیمات را باز می‌کند.
 • نجات خودکار: در صورت مشاهده پیام مربوط به هاپوی خیابانی ترسیده، سه تلاش نجات انجام می‌شود.
 • تنظیمات: اتصال مجدد یا خروج/حذف سلف.
 
@@ -197,6 +243,18 @@ async def text_input(m:Message):
             await db.set_state(uid,"idle"); await home_message(m,uid); await auto.restart(uid)
         else: await m.answer(r.message)
         return
+    if state=="fish_interval":
+        try:
+            n=int(m.text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹","0123456789")))
+            if n<1 or n>10080: raise ValueError
+            await db.set_setting(uid,"fish_minutes",n)
+            await db.set_setting(uid,"fish_enabled",1)
+            await db.set_state(uid,"idle")
+            await auto.restart(uid)
+            await m.answer(f"🎣 ماهی فعال شد؛ هر {n} دقیقه یک‌بار ارسال می‌شود.")
+        except ValueError:
+            await m.answer("یک عدد بین ۱ تا ۱۰۰۸۰ دقیقه وارد کنید.")
+        return
     if state=="withdraw":
         try:
             n=int(m.text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹","0123456789")))
@@ -282,7 +340,17 @@ async def callbacks(cq:CallbackQuery):
         s=await db.settings(uid); await db.set_setting(uid,"hop_enabled",0 if s["hop_enabled"] else 1)
         await edit(cq,"وضعیت هاپ تغییر کرد.",hop_kb(await db.settings(uid))); await auto.restart(uid); return
     if data=="fish":
-        await edit(cq,"🎣 تنظیمات ماهی\n\nشرط‌ها بر اساس ارزش غذایی ماهی هستند.",fish_kb(await db.settings(uid))); return
+        await edit(cq,"🎣 تنظیمات ماهی\n\nبرای تعیین فاصله، دکمه وضعیت ماهی را بزنید یا از /fish استفاده کنید.",fish_kb(await db.settings(uid))); return
+    if data=="fishtoggle":
+        s=await db.settings(uid)
+        if s["fish_enabled"]:
+            await db.set_setting(uid,"fish_enabled",0)
+            await auto.restart(uid)
+            await edit(cq,"ماهی خاموش شد.",fish_kb(await db.settings(uid)))
+        else:
+            await db.set_state(uid,"fish_interval")
+            await edit(cq,"⏱ چند دقیقه یک‌بار «ماهی» ارسال شود؟ عدد ۱ تا ۱۰۰۸۰ را به صورت پیام بفرستید.",fish_kb(await db.settings(uid)))
+        return
     if data=="fishget":
         await auto.fish_once(uid); await edit(cq,"درخواست ماهی انجام شد و در صورت دریافت پاسخ، قانون انتخاب‌شده اعمال می‌شود.",fish_kb(await db.settings(uid))); return
     if data.startswith("fishrule:"):
@@ -306,13 +374,11 @@ async def callbacks(cq:CallbackQuery):
     if data=="game":
         await edit(cq,"🎮 بازی\n\nتعداد ارسال را انتخاب کنید. این حالت فقط وقتی دقیقاً یک گپ انتخاب شده باشد فعال می‌شود.",game_kb(await db.settings(uid))); return
     if data.startswith("gamecount:"):
-        n=int(data.split(":")[1]); groups=await db.selected_groups(uid)
-        if len(groups)!=1: await edit(cq,"برای فعال‌سازی بازی باید دقیقاً یک گپ انتخاب شده باشد.",game_kb(await db.settings(uid))); return
-        await db.set_setting(uid,"game_count",n); await edit(cq,"تعداد بازی ذخیره شد.",game_kb(await db.settings(uid))); return
-    if data=="gametoggle":
-        groups=await db.selected_groups(uid)
-        if len(groups)!=1: await edit(cq,"بازی فقط با یک گپ قابل فعال‌سازی است.",game_kb(await db.settings(uid))); return
-        s=await db.settings(uid); await db.set_setting(uid,"game_enabled",0 if s["game_enabled"] else 1); await edit(cq,"وضعیت بازی تغییر کرد.",game_kb(await db.settings(uid))); await auto.restart(uid); return
+        n=int(data.split(":")[1])
+        await db.set_setting(uid,"game_count",n)
+        await edit(cq,"تعداد بازی ذخیره شد. اکنون /play را در هر گپی که می‌خواهید بفرستید.",game_kb(await db.settings(uid))); return
+    if data=="gameinfo":
+        await cq.answer("/play مقدار انتخاب‌شده را طی ۶۰ ثانیه اجرا می‌کند.",show_alert=True); return
     await cq.answer("گزینه ناشناخته است.")
 
 @dp.message(F.photo)
