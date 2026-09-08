@@ -660,7 +660,7 @@ HTML = r'''<!doctype html>
 <script>
 const fa=n=>Number(n||0).toLocaleString('fa-IR');
 function showMsg(t){const e=document.getElementById('msg');e.textContent=t;e.style.display='block';setTimeout(()=>e.style.display='none',2500)}
-async function req(url,opt={}){const r=await fetch(url,{headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});if(r.status===401){renderLogin();throw new Error('unauthorized')}const d=await r.json();if(!r.ok)throw new Error(d.error||'خطا');return d}
+async function req(url,opt={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});if(r.status===401){renderLogin();throw new Error('unauthorized')}const raw=await r.text();let d;try{d=raw?JSON.parse(raw):{}}catch(e){throw new Error('پاسخ نامعتبر از سرور: '+raw.slice(0,120))}if(!r.ok)throw new Error((d&&d.error)||'خطا');return d}
 function renderLogin(){document.getElementById('app').innerHTML=`<div class="wrap"><div class="card login"><div class="brand"><div class="logo">🐾</div><div><h1>Woofie Admin</h1><div class="muted">مدیریت اشتراک و فروش</div></div></div><form onsubmit="login(event)"><input class="input" id="pw" type="password" placeholder="رمز پنل" autofocus><button class="btn" style="width:100%;margin-top:12px">ورود</button></form></div></div>`}
 async function login(e){e.preventDefault();try{await req('/login',{method:'POST',body:JSON.stringify({password:document.getElementById('pw').value})});load()}catch(x){showMsg(x.message)}}
 async function logout(){await req('/logout',{method:'POST'});renderLogin()}
@@ -676,6 +676,26 @@ load();
 </script></body></html>'''
 
 
+async def read_json_object(request: web.Request) -> dict:
+    """Safely decode a single JSON object from an HTTP request.
+
+    The web UI only sends objects. Reading text first avoids aiohttp's generic
+    JSON decoder surfacing confusing parser errors when a proxy/client sends
+    an unexpected content type or trailing bytes.
+    """
+    raw = await request.text()
+    if not raw.strip():
+        return {}
+    try:
+        import json as _json
+        data = _json.loads(raw)
+    except Exception as exc:
+        raise ValueError(f"JSON نامعتبر است: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("بدنه درخواست باید یک شیء JSON باشد")
+    return data
+
+
 def is_web_authed(request: web.Request) -> bool:
     token = request.cookies.get("woofie_admin")
     return bool(token and token in web_sessions)
@@ -689,7 +709,7 @@ async def web_home(request: web.Request):
 
 async def web_login(request: web.Request):
     try:
-        data = await request.json()
+        data = await read_json_object(request)
     except Exception:
         data = {}
     password = str(data.get("password", ""))
@@ -753,7 +773,7 @@ async def web_create_service(request: web.Request):
     if not is_web_authed(request):
         return web.json_response({"error": "unauthorized"}, status=401)
     try:
-        name, days, price, active = validate_service_payload(await request.json())
+        name, days, price, active = validate_service_payload(await read_json_object(request))
         sid = await db.create_service(name, days, price, active)
         return web.json_response({"ok": True, "id": sid})
     except Exception as e:
@@ -765,7 +785,7 @@ async def web_update_service(request: web.Request):
         return web.json_response({"error": "unauthorized"}, status=401)
     try:
         sid = int(request.match_info["service_id"])
-        name, days, price, active = validate_service_payload(await request.json())
+        name, days, price, active = validate_service_payload(await read_json_object(request))
         if not await db.service(sid):
             return web.json_response({"error": "سرویس پیدا نشد"}, status=404)
         await db.update_service(sid, name, days, price, active)
