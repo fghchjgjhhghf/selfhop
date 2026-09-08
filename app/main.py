@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import hmac
 import logging
 import re
@@ -702,6 +703,22 @@ async def payment_no(cq: CallbackQuery):
 
 # -------------------------- Web admin panel --------------------------
 
+
+def json_resp(data, status: int = 200):
+    """Return a JSON response without relying on aiohttp.json_response kwargs.
+
+    This keeps the API stable across aiohttp versions and prevents a secondary
+    exception in the global error handler from turning API failures into the
+    default HTML 500 page ("Server got itself in trouble").
+    """
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return web.Response(
+        text=body,
+        status=status,
+        content_type="application/json",
+        charset="utf-8",
+    )
+
 HTML = r'''<!doctype html>
 <html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Woofie Admin</title>
@@ -765,10 +782,10 @@ async def web_login(request: web.Request):
         data = {}
     password = str(data.get("password", ""))
     if not hmac.compare_digest(password, cfg.web_admin_password):
-        return web.json_response({"error": "رمز اشتباه است"}, status=401)
+        return json_resp({"error": "رمز اشتباه است"}, status=401)
     token = secrets.token_urlsafe(32)
     web_sessions[token] = asyncio.get_running_loop().time()
-    resp = web.json_response({"ok": True})
+    resp = json_resp({"ok": True})
     resp.set_cookie("woofie_admin", token, httponly=True, samesite="Lax", max_age=86400, secure=False)
     return resp
 
@@ -776,14 +793,14 @@ async def web_login(request: web.Request):
 async def web_logout(request: web.Request):
     token = request.cookies.get("woofie_admin")
     web_sessions.pop(token, None)
-    resp = web.json_response({"ok": True})
+    resp = json_resp({"ok": True})
     resp.del_cookie("woofie_admin")
     return resp
 
 
 async def web_dashboard(request: web.Request):
     if not is_web_authed(request):
-        return web.json_response({"error": "unauthorized"}, status=401)
+        return json_resp({"error": "unauthorized"}, status=401)
     users_count, active_count, pending = await db.counts()
     rows = await db.list_users_with_sales()
     services = await db.list_services(active_only=False)
@@ -798,12 +815,12 @@ async def web_dashboard(request: web.Request):
         {"id": r[0], "name": r[1], "days": int(r[2]), "price": int(r[3]), "active": bool(r[4])}
         for r in services
     ]
-    return web.json_response({
+    return json_resp({
         "counts": {"users": users_count, "active": active_count, "pending": pending},
         "sales_total": await db.sales_total(),
         "services": service_data,
         "users": users,
-    }, ensure_ascii=False)
+    })
 
 
 def validate_service_payload(data):
@@ -822,42 +839,42 @@ def validate_service_payload(data):
 
 async def web_create_service(request: web.Request):
     if not is_web_authed(request):
-        return web.json_response({"error": "unauthorized"}, status=401)
+        return json_resp({"error": "unauthorized"}, status=401)
     try:
         name, days, price, active = validate_service_payload(await read_json_object(request))
         sid = await db.create_service(name, days, price, active)
-        return web.json_response({"ok": True, "id": sid})
+        return json_resp({"ok": True, "id": sid})
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
+        return json_resp({"error": str(e)}, status=400)
 
 
 async def web_update_service(request: web.Request):
     if not is_web_authed(request):
-        return web.json_response({"error": "unauthorized"}, status=401)
+        return json_resp({"error": "unauthorized"}, status=401)
     try:
         sid = int(request.match_info["service_id"])
         name, days, price, active = validate_service_payload(await read_json_object(request))
         if not await db.service(sid):
-            return web.json_response({"error": "سرویس پیدا نشد"}, status=404)
+            return json_resp({"error": "سرویس پیدا نشد"}, status=404)
         await db.update_service(sid, name, days, price, active)
-        return web.json_response({"ok": True})
+        return json_resp({"ok": True})
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
+        return json_resp({"error": str(e)}, status=400)
 
 
 async def web_delete_service(request: web.Request):
     if not is_web_authed(request):
-        return web.json_response({"error": "unauthorized"}, status=401)
+        return json_resp({"error": "unauthorized"}, status=401)
     try:
         sid = int(request.match_info["service_id"])
         await db.delete_service(sid)
-        return web.json_response({"ok": True})
+        return json_resp({"ok": True})
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
+        return json_resp({"error": str(e)}, status=400)
 
 
 async def health(_):
-    return web.json_response({"ok": True, "service": "telegram-self-panel"})
+    return json_resp({"ok": True, "service": "telegram-self-panel"})
 
 
 @web.middleware
@@ -869,7 +886,10 @@ async def api_error_middleware(request: web.Request, handler):
     except Exception as exc:
         log.exception("Web request failed: %s %s", request.method, request.path)
         if request.path.startswith("/api/") or request.path in {"/login", "/logout", "/health"}:
-            return web.json_response({"error": "خطای داخلی سرور", "detail": str(exc)[:300]}, status=500, ensure_ascii=False)
+            try:
+                return json_resp({"error": "خطای داخلی سرور", "detail": str(exc)[:300]}, status=500)
+            except Exception:
+                return web.Response(text='{"error":"internal server error"}', status=500, content_type="application/json")
         return web.Response(text="خطای داخلی سرور", status=500, content_type="text/plain", charset="utf-8")
 
 
@@ -908,9 +928,15 @@ async def set_commands():
 
 async def main():
     await db.init((cfg.price_30, cfg.price_60, cfg.price_90))
-    await resolve_force_join_targets()
     await set_commands()
     await run_http()
+    try:
+        await resolve_force_join_targets()
+    except Exception:
+        # Never prevent Railway/aiohttp from starting because a private invite
+        # cannot be resolved immediately. Membership checks fail closed until
+        # resolution succeeds, while the process keeps serving the health/API.
+        log.exception("Force-join resolution failed during startup")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
