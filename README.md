@@ -1,59 +1,62 @@
-# Telegram Self Automation Panel — Railway
+# Telegram Self Automation + Subscription Panel — Railway
 
-A Persian Telegram bot panel that manages user subscriptions and optional Telethon sessions.
+این نسخه یک ربات فارسی اشتراک/سلف برای Railway است و علاوه بر منوی تلگرام، پنل وب مدرن را روی همان `PORT` اجرا می‌کند.
 
-## Features
+## قابلیت‌ها
 
-- Mandatory channel membership gate with a single «بررسی عضویت» button.
-- Main menu with support, subscription, self setup/settings.
-- Phone-number share button, login code flow and 2FA password flow through Telethon.
-- Separate `.session` file per Telegram numeric user ID.
-- Separate SQLite database for subscriptions, settings, selected groups and payments.
-- Subscription purchase: 30/60/90 days, receipt upload, admin approve/reject.
-- After activation, self panel:
-  - group list and multi-select
-  - automatic «هاپ» schedule: 5/10/15/20 minutes + 20 seconds
-  - fish workflow with a minute-based automatic «ماهی» interval plus sell/feed/fridge rules and numeric thresholds 1–6
-  - scheduled «برداشت هاپو»: sends «هاپو» first, then clicks the inline withdrawal button in the reply
-  - `/play` game mode with 100/200/300; runs in the chat where `/play` is sent and spreads 🎰 messages across 60 seconds
-  - `/menu` command to open the configuration menu
-  - automatic 3 rescue attempts for a configured street-dog event phrase
-- Subscription expiry disables automation.
-- All normal bot UI navigation edits the existing bot message rather than sending a new UI message.
-- `/help` explains usage without exposing implementation details.
-- `/start` always checks required channel membership first.
+- منوی اصلی با ترتیب درخواستی: **راه‌اندازی سلف → تنظیمات سلف → اشتراک → تنظیمات → پشتیبانی**.
+- `/menu` در هر جایی که ربات پیام را دریافت کند، منوی اصلی را باز می‌کند.
+- دستورات در بخش **Commands** تلگرام ثبت می‌شوند: `/start`، `/menu`، `/setup`، `/settings`، `/subscription`، `/fish`، `/withdraw`، `/play`، `/help`.
+- اشتراک‌ها از جدول سرویس‌ها خوانده می‌شوند؛ مدیر در پنل می‌تواند نام، قیمت و تعداد روزها را ویرایش کند و سرویس جدید اضافه کند. سرویس جدید به‌صورت پیش‌فرض **۳۰ روزه** است.
+- بعد از انتخاب سرویس، شماره کارت و `CARD_NUMBER_NAME` نمایش داده می‌شود.
+- کاربر عکس رسید را می‌فرستد؛ عکس + شناسه خریدار + دکمه‌های تأیید/رد برای همه ادمین‌های پرداخت ارسال می‌شود. **تأیید هر کدام از ادمین‌ها** اشتراک را فعال می‌کند و کلیک ادمین دوم بعد از آن بی‌اثر است.
+- ماهی: `/fish 15` یعنی هر ۱۵ دقیقه یک‌بار «ماهی» ارسال شود و پاسخ توسط `@Woofieqbot` خوانده شود.
+- برداشت: `/withdraw 30` یعنی هر ۳۰ دقیقه ابتدا «هاپو» ارسال شود، پاسخ خوانده شود و دکمه شیشه‌ای شامل «برداشت» به‌صورت خودکار کلیک شود.
+- بازی: `/play` در **همان گپی که دستور در آن زده شده** اجرا می‌شود و تعداد انتخاب‌شده از 🎰 طی **۶۰ ثانیه** پخش می‌شود.
+- لیست گپ‌ها و ذخیره چند گپ برای اتوماسیون سلف.
+- انقضای اشتراک، اجرای خودکارها را متوقف می‌کند.
 
-## Important Railway persistence note
+## پنل وب
 
-Railway containers can be recreated. Mount a Railway Volume at `/data`, otherwise sessions/subscriptions can disappear after a redeploy/restart.
+روی همان پورت `8080` در مسیر `/` اجرا می‌شود.
 
-## Required setup
+- رمز پیش‌فرض پنل: `admin` (قابل تغییر با `WEB_ADMIN_PASSWORD`)
+- کارت‌های آمار: تعداد کاربران، اشتراک فعال و فروش کل.
+- مدیریت سرویس‌ها: افزودن، ویرایش قیمت/روز/نام و غیرفعال‌سازی.
+- جدول کاربران با نام، username، شناسه، مجموع فروش تأییدشده و وضعیت اشتراک.
+- رابط واکنش‌گرا، گوشه‌های گرد، سایه، فرم‌های مدرن و RTL فارسی.
 
-1. Create a bot with BotFather and put its token in `BOT_TOKEN`.
-2. No API ID/API Hash is requested from users and no such Railway variables are needed. The bundled Telethon app credentials are used internally; users authenticate with phone number, Telegram code, and optional 2FA.
-3. Add required channels to `FORCE_JOIN_CHANNELS` using `chat_id|join_url`.
-4. Make the bot administrator in required channels so membership checks are reliable.
-5. Put admin numeric IDs in `ADMIN_IDS` and payment admins in `PAYMENT_ADMIN_IDS`.
-6. Set `CARD_NUMBER` and `SUPPORT_URL`.
-7. Set `GAME_BOT_USERNAME` to the bot that replies to «ماهی».
-8. For `/play` and `/fish` to work from the connected Telegram account in any chat, the self account's outgoing command listener must be active (this build enables it automatically after login).
-8. Deploy this repository to Railway and mount a Volume to `/data`.
+## متغیرهای Railway
 
-## Run locally
+```env
+BOT_TOKEN=...
+ADMIN_IDS=6156735083,8510247285
+PAYMENT_ADMIN_IDS=6156735083,8510247285
+FORCE_JOIN_CHANNELS=https://t.me/your_public_channel
+SUPPORT_URL=https://t.me/Hosein_89_89
+CARD_NUMBER=...
+CARD_NUMBER_NAME=حسین یزدی
+GAME_BOT_USERNAME=@Woofieqbot
+WEB_ADMIN_PASSWORD=admin
+DATA_DIR=/data
+PORT=8080
+```
+
+`PRICE_30`، `PRICE_60` و `PRICE_90` فقط قیمت اولیه سه سرویس پیش‌فرض را هنگام ساخت دیتابیس تعیین می‌کنند؛ بعد از آن قیمت و زمان را از پنل وب تغییر دهید.
+
+### نکته مهم درباره Force Join
+
+`FORCE_JOIN_CHANNELS` عمداً فقط **لینک عمومی کانال** می‌گیرد، مثل `https://t.me/my_channel`. ربات با `getChatMember` عضویت کاربر را بررسی می‌کند و باید در کانال ادمین باشد.
+
+لینک‌های دعوت خصوصی از نوع `https://t.me/+HASH` به‌تنهایی توسط Bot API به شناسه کانال قابل تبدیل نیستند؛ بنابراین برای بررسی قابل‌اعتماد، لینک عمومی کانال لازم است. اگر کانال خصوصی است باید روش دیگری برای در اختیار گذاشتن `chat_id` پیاده‌سازی شود.
+
+## Railway
+
+یک Volume روی `/data` وصل کنید تا sessionها، دیتابیس و اطلاعات اشتراک بعد از redeploy باقی بمانند.
 
 ```bash
-cp .env.example .env
-# edit .env
 docker build -t telegram-selfbot-panel .
 docker run --env-file .env -p 8080:8080 -v "$PWD/data:/data" telegram-selfbot-panel
 ```
 
-The health endpoint is available on port 8080.
-
-## Notes about Telegram account login
-
-The user shares their own phone number with the bot. The app asks for the Telegram login code and, if enabled, the 2FA password. Session data is kept per Telegram user ID.
-
-Never publish your `BOT_TOKEN` or session files. The bundled Telethon app credentials should still be treated as application credentials.
-
-Use automation only on accounts/chats where you are authorized to do so and respect Telegram's rules and rate limits.
+هرگز `BOT_TOKEN` و فایل‌های session را عمومی نکنید.
