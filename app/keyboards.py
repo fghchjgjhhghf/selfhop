@@ -15,6 +15,20 @@ def force_join(channels):
 def phone_kb():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="ارسال شماره تلفن من",request_contact=True)]],resize_keyboard=True,one_time_keyboard=True)
 
+
+def code_kb(code=""):
+    b=InlineKeyboardBuilder()
+    for row in (("1","2","3"),("4","5","6"),("7","8","9")):
+        for d in row:
+            b.button(text=d, callback_data=f"code:{d}")
+    b.button(text="⌫ حذف", callback_data="code:back")
+    b.button(text="0", callback_data="code:0")
+    b.button(text="پاک‌کردن", callback_data="code:clear")
+    b.button(text="✅ ورود", callback_data="code:submit")
+    b.button(text="↩️ انصراف", callback_data="code:cancel")
+    b.adjust(3,3,3,3,2,1)
+    return b.as_markup()
+
 def main_kb(ready=False):
     rows=[("پشتیبانی","support"),("اشتراک","subscription")]
     if ready:
@@ -23,8 +37,13 @@ def main_kb(ready=False):
         rows += [("راه‌اندازی سلف","setup"),("⚙️ تنظیمات","settings")]
     return kb(rows)
 
-def sub_kb():
-    return kb([("۱ ماهه — ۳۰٬۰۰۰ تومان","buy:30:30000"),("۲ ماهه — ۶۰٬۰۰۰ تومان","buy:60:60000"),("۳ ماهه — ۹۰٬۰۰۰ تومان","buy:90:90000"),("↩️ بازگشت","home")])
+def sub_kb(p30=30000,p60=60000,p90=90000):
+    return kb([
+        (f"۱ ماهه — {p30:,} تومان",f"buy:30:{p30}"),
+        (f"۲ ماهه — {p60:,} تومان",f"buy:60:{p60}"),
+        (f"۳ ماهه — {p90:,} تومان",f"buy:90:{p90}"),
+        ("↩️ بازگشت","home"),
+    ])
 
 def self_kb():
     return kb([("لیست گپ‌ها","groups"),("تنظیم هاپ","hop"),("تنظیم ماهی","fish"),("برداشت هاپو","withdraw"),("بازی","game"),("↩️ بازگشت","home")])

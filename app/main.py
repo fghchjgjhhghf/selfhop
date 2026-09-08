@@ -5,7 +5,7 @@ from pathlib import Path
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from .config import load_config
 from .db import DB
@@ -96,8 +96,88 @@ async def contact(m:Message):
     r=await tg.begin(uid,phone)
     if r.status=="code":
         await db.set_state(uid,"code")
-        await m.answer("کد ورود تلگرام ارسال شد. کد را همین‌جا به صورت پیام متنی بفرستید.")
+        ui_state.setdefault(uid,{})["login_code"]=""
+        await m.answer("🔐 کد ورود تلگرام ارسال شد. کد را فقط با صفحه‌کلید شیشه‌ای زیر وارد کنید.", reply_markup=ReplyKeyboardRemove())
+        await m.answer("کد واردشده: `—`", reply_markup=code_kb(""))
     else: await m.answer(r.message)
+
+@dp.callback_query(F.data.startswith("code:"))
+async def code_callbacks(cq:CallbackQuery):
+    uid=cq.from_user.id
+    if await db.get_state(uid)!="code":
+        await cq.answer("درخواست ورود فعالی ندارید.", show_alert=True)
+        return
+
+    action=(cq.data or "").split(":",1)[1]
+    st=ui_state.setdefault(uid,{})
+    code=str(st.get("login_code", ""))
+
+    if action.isdigit() and len(action)==1:
+        if len(code) < 8:
+            code += action
+        st["login_code"]=code
+        shown=" ".join(code) if code else "—"
+        try:
+            await cq.message.edit_text(
+                f"🔐 کد ورود\n\nکد واردشده: `{shown}`\n\nبا دکمه‌های زیر ادامه دهید.",
+                reply_markup=code_kb(code),
+            )
+        except Exception:
+            pass
+        await cq.answer()
+        return
+
+    if action=="back":
+        code=code[:-1]
+        st["login_code"]=code
+        shown=" ".join(code) if code else "—"
+        try:
+            await cq.message.edit_text(
+                f"🔐 کد ورود\n\nکد واردشده: `{shown}`\n\nبا دکمه‌های زیر ادامه دهید.",
+                reply_markup=code_kb(code),
+            )
+        except Exception:
+            pass
+        await cq.answer()
+        return
+
+    if action=="clear":
+        st["login_code"]=""
+        try:
+            await cq.message.edit_text(
+                "🔐 کد ورود\n\nکد واردشده: `—`\n\nبا دکمه‌های زیر ادامه دهید.",
+                reply_markup=code_kb(""),
+            )
+        except Exception:
+            pass
+        await cq.answer()
+        return
+
+    if action=="cancel":
+        await db.set_state(uid,"idle")
+        st.pop("login_code",None)
+        await edit(cq,"ورود لغو شد.",settings_kb())
+        return
+
+    if action=="submit":
+        if len(code) < 4:
+            await cq.answer("کد کامل را وارد کنید.", show_alert=True)
+            return
+        r=await tg.verify_code(uid,code)
+        if r.status=="password":
+            await db.set_state(uid,"password")
+            st.pop("login_code",None)
+            await edit(cq,"🔐 کد درست است.\n\nرمز دومرحله‌ای تلگرام را به صورت پیام متنی وارد کنید.",None)
+        elif r.status=="ready":
+            await db.set_state(uid,"idle")
+            st.pop("login_code",None)
+            await home_message(cq,uid)
+            await auto.restart(uid)
+        else:
+            await cq.answer(r.message, show_alert=True)
+        return
+
+    await cq.answer()
 
 @dp.message()
 async def text_input(m:Message):
@@ -137,12 +217,17 @@ async def callbacks(cq:CallbackQuery):
         else: await edit(cq,"هنوز عضویت همه کانال‌ها تأیید نشده است.",force_join(cfg.force_join))
         return
     if data=="home": await home_message(cq,uid); return
-    if data=="support": await edit(cq,"پشتیبانی\n\nبرای ارتباط با پشتیبانی از دکمه زیر استفاده کنید.",kb([("💬 ورود به پشتیبانی",cfg.support_url),("↩️ بازگشت","home")])); return
+    if data=="support":
+        kb_support=InlineKeyboardBuilder()
+        kb_support.button(text="💬 ورود به پشتیبانی", url=cfg.support_url)
+        kb_support.button(text="↩️ بازگشت", callback_data="home")
+        kb_support.adjust(1)
+        await edit(cq,"پشتیبانی\n\nبرای ارتباط با پشتیبانی از دکمه زیر استفاده کنید.",kb_support.as_markup()); return
     if data=="subscription":
         exp,ok=await db.get_subscription(uid)
         status="فعال" if (admin(uid) or await entitled(uid)) else "غیرفعال"
         expiry=exp.replace("T"," ")[:19] if exp else "—"
-        await edit(cq,f"💳 اشتراک\n\nوضعیت: {status}\nپایان اعتبار (UTC): {expiry}\nشناسه حساب: `{uid}`\n\nپلن موردنظر را انتخاب کنید.",sub_kb()); return
+        await edit(cq,f"💳 اشتراک\n\nوضعیت: {status}\nپایان اعتبار (UTC): {expiry}\nشناسه حساب: `{uid}`\n\nپلن موردنظر را انتخاب کنید.",sub_kb(cfg.price_30,cfg.price_60,cfg.price_90)); return
     if data.startswith("buy:"):
         _,days,amount=data.split(":")
         days=int(days); amount=int(amount)
