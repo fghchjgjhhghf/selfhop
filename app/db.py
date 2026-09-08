@@ -111,6 +111,47 @@ class DB:
             pay_cols = {row[1] for row in await c.fetchall()}
             if "service_id" not in pay_cols:
                 await db.execute("ALTER TABLE payments ADD COLUMN service_id INTEGER")
+            if "receipt_file_id" not in pay_cols:
+                await db.execute("ALTER TABLE payments ADD COLUMN receipt_file_id TEXT")
+            if "reviewed_at" not in pay_cols:
+                await db.execute("ALTER TABLE payments ADD COLUMN reviewed_at TEXT")
+
+            # Repair/upgrade service tables created by older builds.
+            c = await db.execute("PRAGMA table_info(services)")
+            service_cols = {row[1] for row in await c.fetchall()}
+            required_service_cols = {
+                "name": "TEXT NOT NULL DEFAULT ''",
+                "days": "INTEGER NOT NULL DEFAULT 30",
+                "price": "INTEGER NOT NULL DEFAULT 0",
+                "active": "INTEGER NOT NULL DEFAULT 1",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+                "updated_at": "TEXT NOT NULL DEFAULT ''",
+            }
+            for col, decl in required_service_cols.items():
+                if col not in service_cols:
+                    await db.execute(f"ALTER TABLE services ADD COLUMN {col} {decl}")
+
+            # Repair settings columns used by the current automation UI.
+            c = await db.execute("PRAGMA table_info(settings)")
+            setting_cols = {row[1] for row in await c.fetchall()}
+            required_setting_cols = {
+                "fish_enabled": "INTEGER DEFAULT 0",
+                "fish_minutes": "INTEGER DEFAULT 5",
+                "fish_sell_op": "TEXT DEFAULT 'none'",
+                "fish_sell_value": "INTEGER DEFAULT 3",
+                "fish_feed_op": "TEXT DEFAULT 'none'",
+                "fish_feed_value": "INTEGER DEFAULT 3",
+                "fish_fridge": "INTEGER DEFAULT 1",
+                "hop_enabled": "INTEGER DEFAULT 0",
+                "hop_minutes": "INTEGER DEFAULT 5",
+                "withdraw_minutes": "INTEGER",
+                "game_enabled": "INTEGER DEFAULT 0",
+                "game_count": "INTEGER DEFAULT 100",
+                "rescue_enabled": "INTEGER DEFAULT 1",
+            }
+            for col, decl in required_setting_cols.items():
+                if col not in setting_cols:
+                    await db.execute(f"ALTER TABLE settings ADD COLUMN {col} {decl}")
 
             c = await db.execute("SELECT COUNT(*) FROM services")
             service_count = (await c.fetchone())[0]

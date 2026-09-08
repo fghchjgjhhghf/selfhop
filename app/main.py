@@ -12,12 +12,14 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand, CallbackQuery, Message, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from telethon import TelegramClient, functions
+from telethon.tl.types import ChatInviteAlready
 
 from .automation import Automation
 from .config import load_config
 from .db import DB
 from .keyboards import *
-from .telethon_manager import TelethonManager
+from .telethon_manager import TelethonManager, API_ID, API_HASH
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("selfbot-panel")
@@ -56,24 +58,73 @@ async def edit(cq: CallbackQuery, text: str, markup=None):
 
 
 def channel_target(url: str) -> str | None:
-    """Turn public t.me channel URLs into a Bot API chat target.
+    """Turn a configured Telegram channel URL into a Bot API chat target.
 
-    Private invite links (+hash) do not expose a chat id through the Bot API,
-    so they cannot be used for reliable getChatMember checks with only the URL.
+    Public links become @username. Private invite links are resolved at startup
+    through an MTProto bot client because the Bot API cannot derive the chat id
+    from an invite URL by itself. The bot must already be a member/admin of that
+    private channel, which matches the intended deployment.
     """
     url = url.strip()
     m = re.fullmatch(r"https?://t\.me/([A-Za-z0-9_]{4,})/?(?:\?.*)?", url)
     if m:
         return "@" + m.group(1)
+    m = re.fullmatch(r"https?://t\.me/\+([A-Za-z0-9_-]+)/*", url)
+    if m:
+        return None
     m = re.fullmatch(r"@([A-Za-z0-9_]{4,})", url)
     return url if m else None
 
 
-async def membership_ok(uid: int) -> bool:
+force_join_targets: dict[str, int | str] = {}
+
+
+async def resolve_force_join_targets() -> None:
+    force_join_targets.clear()
+    if not cfg.force_join_urls:
+        return
+
+    private_hashes: dict[str, str] = {}
     for url in cfg.force_join_urls:
         target = channel_target(url)
-        if not target:
-            log.error("FORCE_JOIN_CHANNELS URL is not a public channel link: %s", url)
+        if target:
+            force_join_targets[url] = target
+            continue
+        m = re.fullmatch(r"https?://t\.me/\+([A-Za-z0-9_-]+)/*", url.strip())
+        if m:
+            private_hashes[url] = m.group(1)
+        else:
+            log.error("Invalid FORCE_JOIN_CHANNELS URL: %s", url)
+
+    if not private_hashes:
+        return
+
+    client = TelegramClient(
+        str(cfg.data_dir / "force_join_resolver"),
+        API_ID,
+        API_HASH,
+    )
+    try:
+        await client.start(bot_token=cfg.bot_token)
+        for url, invite_hash in private_hashes.items():
+            try:
+                result = await client(functions.messages.CheckChatInviteRequest(invite_hash))
+                if isinstance(result, ChatInviteAlready):
+                    force_join_targets[url] = int(result.chat.id)
+                    log.info("Resolved private force-join channel %s -> %s", url, result.chat.id)
+                else:
+                    log.error("Bot is not a member of private force-join channel: %s", url)
+            except Exception:
+                log.exception("Could not resolve private force-join link: %s", url)
+    finally:
+        await client.disconnect()
+
+
+async def membership_ok(uid: int) -> bool:
+    for url in cfg.force_join_urls:
+        target = force_join_targets.get(url)
+        if target is None:
+            log.error("Force-join target has not been resolved: %s", url)
             return False
         try:
             me = await bot.get_chat_member(target, uid)
@@ -660,7 +711,7 @@ HTML = r'''<!doctype html>
 <script>
 const fa=n=>Number(n||0).toLocaleString('fa-IR');
 function showMsg(t){const e=document.getElementById('msg');e.textContent=t;e.style.display='block';setTimeout(()=>e.style.display='none',2500)}
-async function req(url,opt={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});if(r.status===401){renderLogin();throw new Error('unauthorized')}const raw=await r.text();let d;try{d=raw?JSON.parse(raw):{}}catch(e){throw new Error('پاسخ نامعتبر از سرور: '+raw.slice(0,120))}if(!r.ok)throw new Error((d&&d.error)||'خطا');return d}
+async function req(url,opt={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});if(r.status===401){renderLogin();throw new Error('unauthorized')}const raw=await r.text();let d={};try{d=raw?JSON.parse(raw):{}}catch(e){throw new Error('پاسخ نامعتبر از سرور: '+raw.slice(0,180))}if(!r.ok)throw new Error((d&&d.error)||('HTTP '+r.status));return d}
 function renderLogin(){document.getElementById('app').innerHTML=`<div class="wrap"><div class="card login"><div class="brand"><div class="logo">🐾</div><div><h1>Woofie Admin</h1><div class="muted">مدیریت اشتراک و فروش</div></div></div><form onsubmit="login(event)"><input class="input" id="pw" type="password" placeholder="رمز پنل" autofocus><button class="btn" style="width:100%;margin-top:12px">ورود</button></form></div></div>`}
 async function login(e){e.preventDefault();try{await req('/login',{method:'POST',body:JSON.stringify({password:document.getElementById('pw').value})});load()}catch(x){showMsg(x.message)}}
 async function logout(){await req('/logout',{method:'POST'});renderLogin()}
@@ -809,8 +860,21 @@ async def health(_):
     return web.json_response({"ok": True, "service": "telegram-self-panel"})
 
 
+@web.middleware
+async def api_error_middleware(request: web.Request, handler):
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("Web request failed: %s %s", request.method, request.path)
+        if request.path.startswith("/api/") or request.path in {"/login", "/logout", "/health"}:
+            return web.json_response({"error": "خطای داخلی سرور", "detail": str(exc)[:300]}, status=500, ensure_ascii=False)
+        return web.Response(text="خطای داخلی سرور", status=500, content_type="text/plain", charset="utf-8")
+
+
 async def run_http():
-    app = web.Application()
+    app = web.Application(middlewares=[api_error_middleware])
     app.router.add_get("/", web_home)
     app.router.add_get("/health", health)
     app.router.add_post("/login", web_login)
@@ -844,10 +908,7 @@ async def set_commands():
 
 async def main():
     await db.init((cfg.price_30, cfg.price_60, cfg.price_90))
-    if cfg.force_join_urls:
-        for url in cfg.force_join_urls:
-            if not channel_target(url):
-                log.error("Force join link cannot be checked by Bot API unless it is a public channel URL: %s", url)
+    await resolve_force_join_targets()
     await set_commands()
     await run_http()
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
