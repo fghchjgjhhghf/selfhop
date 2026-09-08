@@ -58,92 +58,6 @@ async def edit(cq: CallbackQuery, text: str, markup=None):
     await cq.answer()
 
 
-def channel_target(url: str) -> str | None:
-    """Turn a configured Telegram channel URL into a Bot API chat target.
-
-    Public links become @username. Private invite links are resolved at startup
-    through an MTProto bot client because the Bot API cannot derive the chat id
-    from an invite URL by itself. The bot must already be a member/admin of that
-    private channel, which matches the intended deployment.
-    """
-    url = url.strip()
-    m = re.fullmatch(r"https?://t\.me/([A-Za-z0-9_]{4,})/?(?:\?.*)?", url)
-    if m:
-        return "@" + m.group(1)
-    m = re.fullmatch(r"https?://t\.me/\+([A-Za-z0-9_-]+)/*", url)
-    if m:
-        return None
-    m = re.fullmatch(r"@([A-Za-z0-9_]{4,})", url)
-    return url if m else None
-
-
-force_join_targets: dict[str, int | str] = {}
-
-
-async def resolve_force_join_targets() -> None:
-    force_join_targets.clear()
-    if not cfg.force_join_urls:
-        return
-
-    private_hashes: dict[str, str] = {}
-    for url in cfg.force_join_urls:
-        target = channel_target(url)
-        if target:
-            force_join_targets[url] = target
-            continue
-        m = re.fullmatch(r"https?://t\.me/\+([A-Za-z0-9_-]+)/*", url.strip())
-        if m:
-            private_hashes[url] = m.group(1)
-        else:
-            log.error("Invalid FORCE_JOIN_CHANNELS URL: %s", url)
-
-    if not private_hashes:
-        return
-
-    client = TelegramClient(
-        str(cfg.data_dir / "force_join_resolver"),
-        API_ID,
-        API_HASH,
-    )
-    try:
-        await client.start(bot_token=cfg.bot_token)
-        for url, invite_hash in private_hashes.items():
-            try:
-                result = await client(functions.messages.CheckChatInviteRequest(invite_hash))
-                if isinstance(result, ChatInviteAlready):
-                    force_join_targets[url] = int(result.chat.id)
-                    log.info("Resolved private force-join channel %s -> %s", url, result.chat.id)
-                else:
-                    log.error("Bot is not a member of private force-join channel: %s", url)
-            except Exception:
-                log.exception("Could not resolve private force-join link: %s", url)
-    finally:
-        await client.disconnect()
-
-
-async def membership_ok(uid: int) -> bool:
-    for url in cfg.force_join_urls:
-        target = force_join_targets.get(url)
-        if target is None:
-            log.error("Force-join target has not been resolved: %s", url)
-            return False
-        try:
-            me = await bot.get_chat_member(target, uid)
-            if me.status in ("left", "kicked"):
-                return False
-        except Exception:
-            log.exception("Force-join membership check failed for %s", target)
-            return False
-    return True
-
-
-async def show_gate(m: Message):
-    await m.answer(
-        "برای استفاده از ربات، ابتدا در همه کانال‌های زیر عضو شوید و سپس «بررسی عضویت» را بزنید.",
-        reply_markup=force_join(cfg.force_join_urls),
-    )
-
-
 async def home_message(target, uid: int):
     ready = await tg.is_ready(uid)
     text = "🏠 منوی اصلی\n\nترتیب کار: راه‌اندازی سلف → تنظیمات سلف → اشتراک → تنظیمات"
@@ -158,9 +72,6 @@ async def home_message(target, uid: int):
 async def start(m: Message):
     uid = m.from_user.id
     await db.ensure_user(uid, m.from_user.first_name, m.from_user.last_name, m.from_user.username)
-    if cfg.force_join_urls and not await membership_ok(uid):
-        await show_gate(m)
-        return
     await home_message(m, uid)
 
 
@@ -168,9 +79,6 @@ async def start(m: Message):
 async def menu_cmd(m: Message):
     uid = m.from_user.id
     await db.ensure_user(uid, m.from_user.first_name, m.from_user.last_name, m.from_user.username)
-    if cfg.force_join_urls and not await membership_ok(uid):
-        await show_gate(m)
-        return
     await home_message(m, uid)
 
 
@@ -178,9 +86,6 @@ async def menu_cmd(m: Message):
 async def subscription_cmd(m: Message):
     await db.ensure_user(m.from_user.id, m.from_user.first_name, m.from_user.last_name, m.from_user.username)
     uid = m.from_user.id
-    if cfg.force_join_urls and not await membership_ok(uid):
-        await show_gate(m)
-        return
     services = await db.list_services(active_only=True)
     exp, ok = await db.get_subscription(uid)
     expiry = exp.replace("T", " ")[:19] if exp else "—"
@@ -194,9 +99,6 @@ async def subscription_cmd(m: Message):
 @dp.message(Command("setup"))
 async def setup_cmd(m: Message):
     uid = m.from_user.id
-    if cfg.force_join_urls and not await membership_ok(uid):
-        await show_gate(m)
-        return
     await db.ensure_user(uid, m.from_user.first_name, m.from_user.last_name, m.from_user.username)
     await begin_setup(m, uid)
 
@@ -204,9 +106,6 @@ async def setup_cmd(m: Message):
 @dp.message(Command("settings"))
 async def settings_cmd(m: Message):
     uid = m.from_user.id
-    if cfg.force_join_urls and not await membership_ok(uid):
-        await show_gate(m)
-        return
     await db.ensure_user(uid, m.from_user.first_name, m.from_user.last_name, m.from_user.username)
     await m.answer("⚙️ تنظیمات", reply_markup=settings_kb())
 
@@ -214,9 +113,6 @@ async def settings_cmd(m: Message):
 @dp.message(Command("fish"))
 async def fish_cmd(m: Message):
     uid = m.from_user.id
-    if cfg.force_join_urls and not await membership_ok(uid):
-        await show_gate(m)
-        return
     if not await entitled(uid):
         await m.answer("ابتدا اشتراک معتبر و سلف فعال لازم است.")
         return
@@ -241,9 +137,6 @@ async def fish_cmd(m: Message):
 @dp.message(Command("withdraw"))
 async def withdraw_cmd(m: Message):
     uid = m.from_user.id
-    if cfg.force_join_urls and not await membership_ok(uid):
-        await show_gate(m)
-        return
     if not await entitled(uid):
         await m.answer("ابتدا اشتراک معتبر و سلف فعال لازم است.")
         return
@@ -267,9 +160,6 @@ async def withdraw_cmd(m: Message):
 @dp.message(Command("play"))
 async def play_cmd(m: Message):
     uid = m.from_user.id
-    if cfg.force_join_urls and not await membership_ok(uid):
-        await show_gate(m)
-        return
     if not await entitled(uid):
         await m.answer("ابتدا اشتراک معتبر و سلف فعال لازم است.")
         return
@@ -284,9 +174,6 @@ async def play_cmd(m: Message):
 @dp.message(Command("help"))
 async def help_cmd(m: Message):
     uid = m.from_user.id
-    if cfg.force_join_urls and not await membership_ok(uid):
-        await show_gate(m)
-        return
     text = """📚 راهنمای دستورات
 
 /start — شروع
@@ -324,9 +211,6 @@ async def begin_setup(target, uid: int):
 @dp.message(F.contact)
 async def contact(m: Message):
     uid = m.from_user.id
-    if cfg.force_join_urls and not await membership_ok(uid):
-        await show_gate(m)
-        return
     if m.contact.user_id and m.contact.user_id != uid:
         await m.answer("لطفاً فقط شماره خودتان را ارسال کنید.")
         return
@@ -454,15 +338,6 @@ async def text_input(m: Message):
 async def callbacks(cq: CallbackQuery):
     uid = cq.from_user.id
     data = cq.data or ""
-    if cfg.force_join_urls and data != "join_check" and not await membership_ok(uid):
-        await edit(cq, "ابتدا در همه کانال‌های الزامی عضو شوید.", force_join(cfg.force_join_urls))
-        return
-    if data == "join_check":
-        if await membership_ok(uid):
-            await edit(cq, "عضویت تأیید شد ✅", main_kb(await tg.is_ready(uid)))
-        else:
-            await edit(cq, "هنوز عضویت همه کانال‌ها تأیید نشده است.", force_join(cfg.force_join_urls))
-        return
     if data == "home":
         await home_message(cq, uid)
         return
@@ -930,13 +805,6 @@ async def main():
     await db.init((cfg.price_30, cfg.price_60, cfg.price_90))
     await set_commands()
     await run_http()
-    try:
-        await resolve_force_join_targets()
-    except Exception:
-        # Never prevent Railway/aiohttp from starting because a private invite
-        # cannot be resolved immediately. Membership checks fail closed until
-        # resolution succeeds, while the process keeps serving the health/API.
-        log.exception("Force-join resolution failed during startup")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 

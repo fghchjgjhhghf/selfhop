@@ -37,7 +37,6 @@ class Config:
     bot_token: str
     admin_ids: set[int]
     payment_admin_ids: set[int]
-    force_join_urls: list[str]
     support_url: str
     card_number: str
     card_number_name: str
@@ -64,10 +63,6 @@ class Config:
         return p
 
 
-def parse_force_join_urls(value: str) -> list[str]:
-    return [x.strip() for x in (value or "").split(",") if x.strip()]
-
-
 def load_config() -> Config:
     required = ["BOT_TOKEN"]
     missing = [k for k in required if not os.getenv(k)]
@@ -78,7 +73,6 @@ def load_config() -> Config:
         bot_token=os.environ["BOT_TOKEN"],
         admin_ids=csv_ints(os.getenv("ADMIN_IDS", "")),
         payment_admin_ids=csv_ints(os.getenv("PAYMENT_ADMIN_IDS", "")),
-        force_join_urls=parse_force_join_urls(os.getenv("FORCE_JOIN_CHANNELS", "")),
         support_url=os.getenv("SUPPORT_URL", "https://t.me/"),
         card_number=os.getenv("CARD_NUMBER", ""),
         card_number_name=os.getenv("CARD_NUMBER_NAME", ""),

@@ -10,14 +10,6 @@ def kb(rows):
     return b.as_markup()
 
 
-def force_join(urls):
-    b = InlineKeyboardBuilder()
-    for i, url in enumerate(urls, 1):
-        b.button(text=f"عضویت در کانال {i}", url=url)
-    b.button(text="بررسی عضویت ✓", callback_data="join_check")
-    b.adjust(1)
-    return b.as_markup()
-
 
 def phone_kb():
     return ReplyKeyboardMarkup(
